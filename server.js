@@ -10,7 +10,7 @@ const io = socketIo(server);
 // Store room information
 const rooms = new Map();
 
-// Serve static files
+// Serve static files from public directory
 app.use(express.static('public'));
 
 // Socket.IO connection handling
@@ -100,14 +100,15 @@ io.on('connection', (socket) => {
         socket.to(socket.roomId).emit('video-updated', data);
     });
     
-
     // Real-time chat message
     socket.on('chat-message', (data) => {
         if (!socket.roomId) return;
+        
         // Broadcast to other users in the room
         socket.to(socket.roomId).emit('chat-message', {
             username: socket.username,
-            message: data.message
+            message: data.message,
+            timestamp: new Date().toISOString()
         });
     });
 
@@ -115,19 +116,24 @@ io.on('connection', (socket) => {
     socket.on('voice-offer', ({ to, offer }) => {
         io.to(to).emit('voice-offer', { from: socket.id, offer });
     });
+    
     socket.on('voice-answer', ({ to, answer }) => {
         io.to(to).emit('voice-answer', { from: socket.id, answer });
     });
+    
     socket.on('voice-candidate', ({ to, candidate }) => {
         io.to(to).emit('voice-candidate', { from: socket.id, candidate });
     });
+    
     socket.on('start-voice', ({ roomId }) => {
-        // Initiate peer connections with all other users in the room
+        // Get all users in the room
         const room = rooms.get(roomId);
         if (!room) return;
+        
+        // Send voice offer to all other users in the room
         room.users.forEach(user => {
             if (user.id !== socket.id) {
-                socket.emit('voice-offer', { from: user.id });
+                socket.emit('voice-offer', { to: user.id });
             }
         });
     });
@@ -141,7 +147,10 @@ io.on('connection', (socket) => {
                 room.users = room.users.filter(u => u.id !== socket.id);
                 
                 // Notify others
-                socket.to(socket.roomId).emit('user-disconnected', { username: socket.username });
+                socket.to(socket.roomId).emit('user-disconnected', { 
+                    username: socket.username,
+                    id: socket.id 
+                });
                 
                 // Clean up empty rooms
                 if (room.users.length === 0) {
@@ -156,4 +165,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Access the app at http://localhost:${PORT}`);
 });
