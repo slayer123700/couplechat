@@ -711,6 +711,7 @@
         let localStream;
         let peerConnections = {};
         let voiceActive = false;
+        let setupComplete = false;
 
         // Initialize heart background
         function createHearts() {
@@ -753,26 +754,96 @@
             return urlParams.get('room');
         }
         
-        // Update connection status
-        function updateConnectionStatus(connected, text) {
-            const statusIndicator = document.getElementById('connection-status');
-            const connectionText = document.getElementById('connection-text');
-            const chatStatus = document.getElementById('chat-status');
-            const chatStatusText = document.getElementById('chat-status-text');
-            
-            if (connected) {
-                statusIndicator.className = 'status-indicator';
-                connectionText.textContent = 'Partner connected';
-                chatStatus.className = 'status-indicator';
-                chatStatusText.textContent = 'Connected';
-            } else {
-                statusIndicator.className = 'status-indicator status-offline';
-                connectionText.textContent = 'Waiting for partner...';
-                chatStatus.className = 'status-indicator status-offline';
-                chatStatusText.textContent = 'Connecting...';
+        // Enhanced YouTube API loading with timeout
+        function loadYouTubeAPI() {
+            if (window.YT && window.YT.loaded) {
+                initializePlayer();
+                return;
             }
+            
+            // Create script tag
+            const tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            
+            // Add error handling
+            tag.onerror = function() {
+                addMessage('System', 'Failed to load YouTube API. Please check your internet connection.', 'received');
+            };
+            
+            const firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+            
+            // Add timeout in case API fails to load
+            setTimeout(() => {
+                if (!window.YT) {
+                    addMessage('System', 'YouTube API failed to load after 10 seconds. Please refresh the page.', 'received');
+                }
+            }, 10000);
         }
         
+        // Initialize player when API is ready
+        function initializePlayer() {
+            if (playerReady || !setupComplete) return;
+            
+            if (!document.getElementById('youtube-player')) {
+                console.error('YouTube player container not found');
+                return;
+            }
+            
+            player = new YT.Player('youtube-player', {
+                height: '100%',
+                width: '100%',
+                videoId: 'dQw4w9WgXcQ',
+                playerVars: {
+                    'playsinline': 1,
+                    'rel': 0,
+                    'modestbranding': 1,
+                    'enablejsapi': 1
+                },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange,
+                    'onError': function(event) {
+                        console.error("YouTube Player Error:", event);
+                        addMessage('System', 'YouTube player error occurred. Please refresh the page.', 'received');
+                    }
+                }
+            });
+        }
+        
+        // YouTube API ready callback
+        window.onYouTubeIframeAPIReady = function() {
+            console.log("YouTube API is ready");
+            if (setupComplete) {
+                initializePlayer();
+            }
+        };
+        
+        function onPlayerReady(event) {
+            console.log("Player is ready");
+            playerReady = true;
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            if (playPauseBtn) {
+                playPauseBtn.textContent = '⏸';
+            }
+            isPlaying = true;
+            addMessage('System', 'YouTube player is ready!', 'received');
+        }
+        
+        function onPlayerStateChange(event) {
+            console.log("Player state changed:", event.data);
+            const playPauseBtn = document.getElementById('play-pause-btn');
+            if (!playPauseBtn) return;
+            
+            if (event.data == YT.PlayerState.PLAYING) {
+                playPauseBtn.textContent = '⏸';
+                isPlaying = true;
+            } else if (event.data == YT.PlayerState.PAUSED || event.data == YT.PlayerState.ENDED) {
+                playPauseBtn.textContent = '▶';
+                isPlaying = false;
+            }
+        }
+
         // Login functionality
         document.getElementById('login-btn').addEventListener('click', function() {
             const username = document.getElementById('username').value.trim();
@@ -809,7 +880,7 @@
             // Update URL with room code
             updateUrlWithRoom(roomCode);
             
-            // Connect to server and join room
+            // Connect to server
             connectToServer();
             
             addMessage('System', `You've joined room ${roomCode}.`, 'received');
@@ -821,7 +892,7 @@
             }
         });
         
-        // Connect to server and join room
+        // Connect to server
         function connectToServer() {
             socket = io();
             
@@ -832,6 +903,12 @@
                     roomId: currentRoomCode, 
                     username: userName 
                 });
+                
+                // Mark setup as complete and initialize player
+                setupComplete = true;
+                if (window.YT && window.YT.loaded) {
+                    initializePlayer();
+                }
                 
                 // Update sync status
                 const syncStatus = document.getElementById('sync-status');
@@ -852,13 +929,11 @@
             // User connected
             socket.on('user-connected', (data) => {
                 addMessage('System', `${data.username} has joined the room!`, 'received');
-                updateConnectionStatus(true, 'Partner connected');
             });
             
             // User disconnected
             socket.on('user-disconnected', (data) => {
                 addMessage('System', `${data.username} has left the room`, 'received');
-                updateConnectionStatus(false, 'Partner disconnected');
             });
             
             // Chat messages
@@ -1030,49 +1105,6 @@
             
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }
-        
-        // YouTube Player functionality
-        window.onYouTubeIframeAPIReady = function() {
-            console.log("YouTube API is ready");
-            player = new YT.Player('youtube-player', {
-                height: '100%',
-                width: '100%',
-                videoId: 'dQw4w9WgXcQ',
-                playerVars: {
-                    'playsinline': 1,
-                    'rel': 0,
-                    'modestbranding': 1,
-                    'enablejsapi': 1
-                },
-                events: {
-                    'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange,
-                    'onError': function(event) {
-                        console.error("YouTube Player Error:", event);
-                        addMessage('System', 'YouTube player error occurred. Please refresh the page.', 'received');
-                    }
-                }
-            });
-        };
-        
-        function onPlayerReady(event) {
-            console.log("Player is ready");
-            playerReady = true;
-            document.getElementById('play-pause-btn').textContent = '⏸';
-            isPlaying = true;
-            addMessage('System', 'YouTube player is ready!', 'received');
-        }
-        
-        function onPlayerStateChange(event) {
-            console.log("Player state changed:", event.data);
-            if (event.data == YT.PlayerState.PLAYING) {
-                document.getElementById('play-pause-btn').textContent = '⏸';
-                isPlaying = true;
-            } else if (event.data == YT.PlayerState.PAUSED || event.data == YT.PlayerState.ENDED) {
-                document.getElementById('play-pause-btn').textContent = '▶';
-                isPlaying = false;
-            }
         }
         
         // Control buttons
@@ -1377,6 +1409,9 @@
                     document.getElementById('load-btn').click();
                 }
             });
+            
+            // Load YouTube API
+            loadYouTubeAPI();
         };
     </script>
 </body>
