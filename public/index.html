@@ -1047,7 +1047,11 @@
                 },
                 events: {
                     'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange
+                    'onStateChange': onPlayerStateChange,
+                    'onError': function(event) {
+                        console.error("YouTube Player Error:", event);
+                        addMessage('System', 'YouTube player error occurred. Please refresh the page.', 'received');
+                    }
                 }
             });
         };
