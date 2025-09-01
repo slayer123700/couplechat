@@ -11,7 +11,7 @@ const io = socketIo(server);
 const rooms = new Map();
 
 // Serve static files from public directory
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
