@@ -1,7 +1,6 @@
 {
-  "name": "couplestream",
+  "name": "couplechat",
   "version": "1.0.0",
-  "description": "Synced video viewing for couples",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
