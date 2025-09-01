@@ -7,6 +7,9 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
+// Store room information
+const rooms = new Map();
+
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
