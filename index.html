@@ -471,7 +471,7 @@
         .chat-input button:hover {
             transform: scale(1.05);
         }
-
+        
         .voice-btn {
             margin-left: 8px;
             background: var(--secondary);
@@ -483,6 +483,7 @@
             cursor: pointer;
             transition: background 0.2s;
         }
+        
         .voice-btn.active {
             background: var(--primary);
         }
@@ -561,6 +562,22 @@
         .copy-room-btn:hover {
             background: rgba(162, 155, 254, 0.2);
         }
+        
+        .sync-indicator {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            z-index: 10;
+        }
+        
+        .sync-active {
+            background: rgba(78, 205, 196, 0.9);
+        }
     </style>
 </head>
 <body>
@@ -615,6 +632,7 @@
                     <div class="video-container">
                         <div id="youtube-player"></div>
                         <button class="fullscreen-btn" id="fullscreen-youtube">⛶</button>
+                        <div class="sync-indicator" id="sync-status">Not Synced</div>
                     </div>
                     
                     <div class="screen-share-container" id="screen-share-container">
@@ -683,15 +701,16 @@
     </div>
 
     <script>
-    // Global variables
-    let player;
-    let isPlaying = false;
-    let playerReady = false;
-    let currentRoomCode = '';
-    let userName = '';
-    let socket;
-    let localStream;
-    let peerConnections = {};
+        // Global variables
+        let player;
+        let isPlaying = false;
+        let playerReady = false;
+        let currentRoomCode = '';
+        let userName = '';
+        let socket;
+        let localStream;
+        let peerConnections = {};
+        let voiceActive = false;
 
         // Initialize heart background
         function createHearts() {
@@ -734,6 +753,26 @@
             return urlParams.get('room');
         }
         
+        // Update connection status
+        function updateConnectionStatus(connected, text) {
+            const statusIndicator = document.getElementById('connection-status');
+            const connectionText = document.getElementById('connection-text');
+            const chatStatus = document.getElementById('chat-status');
+            const chatStatusText = document.getElementById('chat-status-text');
+            
+            if (connected) {
+                statusIndicator.className = 'status-indicator';
+                connectionText.textContent = 'Partner connected';
+                chatStatus.className = 'status-indicator';
+                chatStatusText.textContent = 'Connected';
+            } else {
+                statusIndicator.className = 'status-indicator status-offline';
+                connectionText.textContent = 'Waiting for partner...';
+                chatStatus.className = 'status-indicator status-offline';
+                chatStatusText.textContent = 'Connecting...';
+            }
+        }
+        
         // Login functionality
         document.getElementById('login-btn').addEventListener('click', function() {
             const username = document.getElementById('username').value.trim();
@@ -770,16 +809,139 @@
             // Update URL with room code
             updateUrlWithRoom(roomCode);
             
-            // Add message about the room
-            addMessage('System', `You've joined room ${roomCode}. Share this page with your partner to start watching together.`, 'received');
+            // Connect to socket server and join room
+            connectToServer();
             
-            // Check if this is a new room or joining existing
+            addMessage('System', `You've joined room ${roomCode}.`, 'received');
+            
             if (roomInput.value.trim() === '') {
-                addMessage('System', 'You created a new room. Wait for your partner to join using this room code.', 'received');
+                addMessage('System', 'You created a new room. Share the room code with your partner to start watching together.', 'received');
             } else {
-                addMessage('System', `You joined room ${roomCode}. Your partner should already be here.`, 'received');
+                addMessage('System', `You joined room ${roomCode}. Waiting for your partner to confirm connection...`, 'received');
             }
         });
+        
+        // Connect to server and join room
+        function connectToServer() {
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                // Join the room after connection
+                socket.emit('join-room', { 
+                    roomId: currentRoomCode, 
+                    username: userName 
+                });
+                
+                // Update sync status
+                const syncStatus = document.getElementById('sync-status');
+                syncStatus.textContent = 'Sync Ready';
+                syncStatus.classList.add('sync-active');
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                addMessage('System', 'Connection failed. Please check your internet connection.', 'received');
+            });
+            
+            // Handle real-time events
+            setupSocketListeners();
+        }
+        
+        function setupSocketListeners() {
+            // User connected
+            socket.on('user-connected', (data) => {
+                addMessage('System', `${data.username} has joined the room!`, 'received');
+                updateConnectionStatus(true, 'Partner connected');
+            });
+            
+            // User disconnected
+            socket.on('user-disconnected', (data) => {
+                addMessage('System', `${data.username} has left the room`, 'received');
+                updateConnectionStatus(false, 'Partner disconnected');
+            });
+            
+            // Chat messages
+            socket.on('chat-message', (data) => {
+                addMessage(data.username, data.message, 'received');
+            });
+            
+            // Video playback updates
+            socket.on('playback-update', (data) => {
+                if (!playerReady) return;
+                
+                // Update playback state
+                if (typeof data.isPlaying === 'boolean') {
+                    if (data.isPlaying) {
+                        player.playVideo();
+                    } else {
+                        player.pauseVideo();
+                    }
+                }
+                
+                if (typeof data.currentTime === 'number') {
+                    player.seekTo(data.currentTime);
+                }
+                
+                if (typeof data.playbackRate === 'number') {
+                    player.setPlaybackRate(data.playbackRate);
+                    document.getElementById('speed-select').value = data.playbackRate;
+                }
+                
+                if (typeof data.quality === 'string' && data.quality !== 'auto') {
+                    player.setPlaybackQuality(data.quality);
+                    document.getElementById('quality-select').value = data.quality;
+                }
+            });
+            
+            // Video change
+            socket.on('video-updated', (data) => {
+                if (!playerReady) return;
+                
+                if (data.videoId) {
+                    player.loadVideoById(data.videoId);
+                    isPlaying = true;
+                    document.getElementById('play-pause-btn').textContent = '⏸';
+                    addMessage('System', `Now playing video: ${data.videoId}`, 'received');
+                }
+            });
+            
+            // WebRTC voice chat
+            socket.on('voice-offer', async (data) => {
+                try {
+                    const { from, offer } = data;
+                    const pc = createPeerConnection(from);
+                    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socket.emit('voice-answer', { to: from, answer });
+                } catch (error) {
+                    console.error('Error handling voice offer:', error);
+                }
+            });
+            
+            socket.on('voice-answer', async (data) => {
+                try {
+                    const { from, answer } = data;
+                    if (peerConnections[from]) {
+                        await peerConnections[from].setRemoteDescription(new RTCSessionDescription(answer));
+                    }
+                } catch (error) {
+                    console.error('Error handling voice answer:', error);
+                }
+            });
+            
+            socket.on('voice-candidate', async (data) => {
+                try {
+                    const { from, candidate } = data;
+                    if (peerConnections[from]) {
+                        await peerConnections[from].addIceCandidate(new RTCIceCandidate(candidate));
+                    }
+                } catch (error) {
+                    console.error('Error handling voice candidate:', error);
+                }
+            });
+        }
         
         // Generate room code button
         document.getElementById('generate-room').addEventListener('click', function() {
@@ -802,6 +964,14 @@
         
         // Logout functionality
         document.getElementById('logout-btn').addEventListener('click', function() {
+            // Disconnect from socket
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            // Stop any active streams
+            stopVoice();
+            
             document.getElementById('main-screen').style.display = 'none';
             document.getElementById('login-screen').style.display = 'block';
             document.getElementById('username').value = '';
@@ -812,16 +982,44 @@
             const url = new URL(window.location);
             url.searchParams.delete('room');
             window.history.pushState({}, '', url);
+            
+            addMessage('System', 'You have left the room.', 'received');
         });
         
         // Chat functionality
-        // --- Real-time Chat & Voice Chat ---
+        document.getElementById('send-btn').addEventListener('click', sendMessage);
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+        
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            if (message && socket && socket.connected) {
+                // Add local message
+                addMessage(userName, message, 'sent');
+                
+                // Send to server
+                socket.emit('chat-message', {
+                    message: message,
+                    roomId: currentRoomCode
+                });
+                
+                input.value = '';
+            } else if (!socket || !socket.connected) {
+                addMessage('System', 'Cannot send message: not connected to server.', 'received');
+            }
+        }
+        
         function addMessage(username, text, type) {
             const messagesContainer = document.getElementById('chat-messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${type}`;
+            
             const now = new Date();
-            const timeString = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+            const timeString = now.getHours().toString().padStart(2, '0') + ':' + 
+                              now.getMinutes().toString().padStart(2, '0');
+            
             messageDiv.innerHTML = `
                 <div class="message-header">
                     <span class="message-username">${username}</span>
@@ -829,124 +1027,10 @@
                 </div>
                 <div>${text}</div>
             `;
+            
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
-
-        function setupSocketIO() {
-            socket = io();
-            socket.emit('join-room', { roomId: currentRoomCode, username: userName });
-            socket.on('chat-message', data => {
-                addMessage(data.username, data.message, 'received');
-            });
-            // --- Voice chat signaling ---
-            socket.on('voice-offer', async ({ from, offer }) => {
-                const pc = createPeerConnection(from);
-                await pc.setRemoteDescription(new RTCSessionDescription(offer));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                socket.emit('voice-answer', { to: from, answer });
-            });
-            socket.on('voice-answer', async ({ from, answer }) => {
-                if (peerConnections[from]) {
-                    await peerConnections[from].setRemoteDescription(new RTCSessionDescription(answer));
-                }
-            });
-            socket.on('voice-candidate', async ({ from, candidate }) => {
-                if (peerConnections[from]) {
-                    await peerConnections[from].addIceCandidate(new RTCIceCandidate(candidate));
-                }
-            });
-            socket.on('user-disconnected', ({ id }) => {
-                if (peerConnections[id]) {
-                    peerConnections[id].close();
-                    delete peerConnections[id];
-                }
-            });
-        }
-
-        document.getElementById('send-btn').addEventListener('click', function() {
-            const input = document.getElementById('message-input');
-            const msg = input.value.trim();
-            if (msg && socket) {
-                socket.emit('chat-message', { roomId: currentRoomCode, username: userName, message: msg });
-                addMessage('Me', msg, 'sent');
-                input.value = '';
-            }
-        });
-        document.getElementById('message-input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') document.getElementById('send-btn').click();
-        });
-
-        // --- Voice chat ---
-        document.getElementById('voice-btn').onmousedown = async function() {
-            this.classList.add('active');
-            await startVoice();
-        };
-        document.getElementById('voice-btn').onmouseup = function() {
-            this.classList.remove('active');
-            stopVoice();
-        };
-        document.getElementById('voice-btn').onmouseleave = function() {
-            this.classList.remove('active');
-            stopVoice();
-        };
-
-        async function startVoice() {
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                for (const id in peerConnections) {
-                    const pc = peerConnections[id];
-                    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-                }
-                // For new connections
-                socket.emit('start-voice', { roomId: currentRoomCode });
-            } catch (e) {
-                alert('Microphone access denied.');
-            }
-        }
-        function stopVoice() {
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
-        }
-
-        function createPeerConnection(id) {
-            const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-            peerConnections[id] = pc;
-            if (localStream) {
-                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-            }
-            pc.onicecandidate = event => {
-                if (event.candidate) {
-                    socket.emit('voice-candidate', { to: id, candidate: event.candidate });
-                }
-            };
-            pc.ontrack = event => {
-                let audio = document.getElementById('audio-' + id);
-                if (!audio) {
-                    audio = document.createElement('audio');
-                    audio.id = 'audio-' + id;
-                    audio.autoplay = true;
-                    document.body.appendChild(audio);
-                }
-                audio.srcObject = event.streams[0];
-            };
-            return pc;
-        }
-
-        // Patch login to setup socket
-        const origLoginBtn = document.getElementById('login-btn').onclick;
-        document.getElementById('login-btn').onclick = function() {
-            userName = document.getElementById('username').value.trim();
-            currentRoomCode = document.getElementById('room').value.trim().toUpperCase() || generateRoomCode();
-            if (userName && currentRoomCode) {
-                setupSocketIO();
-            }
-            if (origLoginBtn) origLoginBtn();
-        };
-        // --- End Chat & Voice ---
         
         // YouTube Player functionality
         window.onYouTubeIframeAPIReady = function() {
@@ -996,8 +1080,16 @@
             
             if (isPlaying) {
                 player.pauseVideo();
+                sendPlaybackCommand({
+                    isPlaying: false,
+                    currentTime: player.getCurrentTime()
+                });
             } else {
                 player.playVideo();
+                sendPlaybackCommand({
+                    isPlaying: true,
+                    currentTime: player.getCurrentTime()
+                });
             }
         });
         
@@ -1006,18 +1098,37 @@
             player.stopVideo();
             isPlaying = false;
             document.getElementById('play-pause-btn').textContent = '▶';
+            
+            sendPlaybackCommand({
+                isPlaying: false,
+                currentTime: 0
+            });
         });
         
         document.getElementById('speed-select').addEventListener('change', function() {
             if (!playerReady) return;
-            player.setPlaybackRate(parseFloat(this.value));
+            const speed = parseFloat(this.value);
+            player.setPlaybackRate(speed);
+            
+            sendPlaybackCommand({
+                playbackRate: speed,
+                currentTime: player.getCurrentTime(),
+                isPlaying: isPlaying
+            });
         });
         
         document.getElementById('quality-select').addEventListener('change', function() {
             if (!playerReady) return;
-            if (this.value !== 'auto') {
-                player.setPlaybackQuality(this.value);
+            const quality = this.value;
+            if (quality !== 'auto') {
+                player.setPlaybackQuality(quality);
             }
+            
+            sendPlaybackCommand({
+                quality: quality,
+                currentTime: player.getCurrentTime(),
+                isPlaying: isPlaying
+            });
         });
         
         document.getElementById('load-btn').addEventListener('click', function() {
@@ -1028,7 +1139,6 @@
                 // Extract video ID from URL
                 try {
                     if (url.includes('youtube.com') || url.includes('youtu.be')) {
-                        // Handle different YouTube URL formats
                         if (url.includes('v=')) {
                             const match = url.match(/[?&]v=([^&]+)/);
                             videoId = match ? match[1] : '';
@@ -1036,21 +1146,29 @@
                             const parts = url.split('youtu.be/');
                             videoId = parts[1].split(/[?&]/)[0];
                         } else if (url.length === 11) {
-                            // Direct video ID
                             videoId = url;
                         }
                     } else {
-                        // Assume it's a video ID
                         videoId = url;
                     }
                     
                     if (videoId) {
-                        // Clean the video ID from any extra characters
                         videoId = videoId.split(/[?&]/)[0];
+                        
+                        // Load locally
                         player.loadVideoById(videoId);
                         isPlaying = true;
                         document.getElementById('play-pause-btn').textContent = '⏸';
-                        addMessage('System', `Now playing video: ${videoId}`, 'received');
+                        
+                        // Send to partner
+                        if (socket && socket.connected) {
+                            socket.emit('video-change', {
+                                videoId: videoId,
+                                roomId: currentRoomCode
+                            });
+                            
+                            addMessage('System', `Loading video for both of you: ${videoId}`, 'received');
+                        }
                     } else {
                         addMessage('System', 'Could not extract video ID from the URL. Please check the URL format.', 'received');
                     }
@@ -1064,6 +1182,16 @@
                 addMessage('System', 'Please enter a valid YouTube URL or video ID.', 'received');
             }
         });
+        
+        // Send playback command to server
+        function sendPlaybackCommand(command) {
+            if (socket && socket.connected && currentRoomCode) {
+                socket.emit('playback-control', {
+                    ...command,
+                    roomId: currentRoomCode
+                });
+            }
+        }
         
         // Screen sharing functionality
         document.getElementById('screen-share-btn').addEventListener('click', function() {
@@ -1108,6 +1236,91 @@
                 });
             }
         });
+        
+        // Voice chat functionality
+        document.getElementById('voice-btn').addEventListener('mousedown', startVoice);
+        document.getElementById('voice-btn').addEventListener('mouseup', stopVoice);
+        document.getElementById('voice-btn').addEventListener('mouseleave', stopVoice);
+        
+        async function startVoice() {
+            if (voiceActive) return;
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                voiceActive = true;
+                document.getElementById('voice-btn').classList.add('active');
+                
+                // Add tracks to existing peer connections
+                for (const id in peerConnections) {
+                    localStream.getTracks().forEach(track => {
+                        peerConnections[id].addTrack(track, localStream);
+                    });
+                }
+                
+                // Signal to start voice chat
+                if (socket && socket.connected) {
+                    socket.emit('start-voice', { roomId: currentRoomCode });
+                }
+                
+                addMessage('System', 'Voice chat started', 'received');
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                addMessage('System', 'Microphone access denied. Please allow microphone access.', 'received');
+            }
+        }
+        
+        function stopVoice() {
+            if (!voiceActive) return;
+            
+            voiceActive = false;
+            document.getElementById('voice-btn').classList.remove('active');
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+        }
+        
+        // Create WebRTC peer connection
+        function createPeerConnection(id) {
+            const pc = new RTCPeerConnection({ 
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] 
+            });
+            
+            peerConnections[id] = pc;
+            
+            // Add local stream if available
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+            }
+            
+            // Handle ICE candidates
+            pc.onicecandidate = (event) => {
+                if (event.candidate && socket && socket.connected) {
+                    socket.emit('voice-candidate', { 
+                        to: id, 
+                        candidate: event.candidate 
+                    });
+                }
+            };
+            
+            // Handle remote stream
+            pc.ontrack = (event) => {
+                // Create audio element if it doesn't exist
+                let audio = document.getElementById(`audio-${id}`);
+                if (!audio) {
+                    audio = document.createElement('audio');
+                    audio.id = `audio-${id}`;
+                    audio.autoplay = true;
+                    // Don't add to DOM, just keep it for audio
+                }
+                audio.srcObject = event.streams[0];
+            };
+            
+            return pc;
+        }
         
         // Fullscreen functionality
         document.getElementById('fullscreen-youtube').addEventListener('click', function() {
